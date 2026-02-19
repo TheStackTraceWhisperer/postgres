@@ -1,4 +1,5 @@
--- Runs on first container start when the data directory is empty.
+-- Test database initialization script for Testcontainers
+-- This creates the same schema as the production init script
 
 CREATE TABLE IF NOT EXISTS public.widgets (
   id SERIAL PRIMARY KEY,
@@ -90,9 +91,4 @@ CREATE TRIGGER widgets_audit_trigger
   AFTER INSERT OR UPDATE OR DELETE ON public.widgets
   FOR EACH ROW
   EXECUTE FUNCTION public.audit_widgets_changes();
-
-INSERT INTO public.widgets (name, quantity, price) VALUES
-  ('alpha', 10, 19.99),
-  ('beta', 25, 29.99),
-  ('gamma', 5, 39.99);
 
