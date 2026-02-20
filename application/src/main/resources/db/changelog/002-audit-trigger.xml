@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+    <changeSet id="004-audit-trigger-function" author="system" runOnChange="true">
+        <preConditions onFail="CONTINUE">
+            <dbms type="postgresql"/>
+        </preConditions>
+        <comment>Create audit trigger function</comment>
+        <sql splitStatements="false">
+            CREATE OR REPLACE FUNCTION public.audit_widgets_changes()
+            RETURNS TRIGGER AS $$
+            DECLARE
+              v_current_user VARCHAR(100);
+            BEGIN
+              v_current_user := COALESCE(
+                current_setting('app.current_user', true),
+                current_user
+              );
+              IF (TG_OP = 'DELETE') THEN
+                INSERT INTO public.widgets_audit (
+                  operation, widget_id, name, created_at, quantity, price, changed_by
+                ) VALUES (
+                  'DELETE', OLD.id, OLD.name, OLD.created_at, OLD.quantity, OLD.price, v_current_user
+                );
+                RETURN OLD;
+              ELSIF (TG_OP = 'UPDATE') THEN
+                INSERT INTO public.widgets_audit (
+                  operation, widget_id, name, created_at, quantity, price, changed_by
+                ) VALUES (
+                  'UPDATE', NEW.id, NEW.name, NEW.created_at, NEW.quantity, NEW.price, v_current_user
+                );
+                RETURN NEW;
+              ELSIF (TG_OP = 'INSERT') THEN
+                INSERT INTO public.widgets_audit (
+                  operation, widget_id, name, created_at, quantity, price, changed_by
+                ) VALUES (
+                  'INSERT', NEW.id, NEW.name, NEW.created_at, NEW.quantity, NEW.price, v_current_user
+                );
+                RETURN NEW;
+              END IF;
+              RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql;
+        </sql>
+    </changeSet>
+    <changeSet id="005-audit-trigger" author="system" runOnChange="true">
+        <preConditions onFail="CONTINUE">
+            <dbms type="postgresql"/>
+        </preConditions>
+        <comment>Create audit trigger on widgets table</comment>
+        <sql>
+            DROP TRIGGER IF EXISTS widgets_audit_trigger ON public.widgets;
+            CREATE TRIGGER widgets_audit_trigger
+            AFTER INSERT OR UPDATE OR DELETE ON public.widgets
+            FOR EACH ROW EXECUTE FUNCTION public.audit_widgets_changes();
+        </sql>
+    </changeSet>
+</databaseChangeLog>

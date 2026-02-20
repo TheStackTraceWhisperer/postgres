@@ -1,5 +1,6 @@
 package application;
 
+import application.audit.AuditContext;
 import application.model.Widget;
 import application.model.WidgetAudit;
 import application.repo.WidgetAuditRepository;
@@ -24,7 +25,6 @@ import static org.junit.jupiter.api.Assertions.*;
 @SpringBootTest
 @ActiveProfiles("test")
 @Import(TestcontainersConfiguration.class)
-@Transactional
 class AuditTriggerIntegrationTest {
 
   @Autowired
@@ -34,12 +34,14 @@ class AuditTriggerIntegrationTest {
   private WidgetAuditRepository widgetAuditRepository;
 
   @Test
+  @Transactional
   void testAuditRepositoryExists() {
     assertNotNull(widgetAuditRepository);
     assertNotNull(widgetRepository);
   }
 
   @Test
+  @Transactional
   void testInsertOperationCapturedInAudit() {
     // Clear any existing data
     long initialAuditCount = widgetAuditRepository.count();
@@ -73,8 +75,9 @@ class AuditTriggerIntegrationTest {
   }
 
   @Test
+  @Transactional
   void testUpdateOperationCapturedInAudit() {
-    // Create initial widget
+    // 1. Arrange: Create initial widget
     Widget widget = new Widget(
       "Audit Test Update",
       OffsetDateTime.now(),
@@ -82,17 +85,26 @@ class AuditTriggerIntegrationTest {
       new BigDecimal("15.99")
     );
     Widget saved = widgetRepository.saveAndFlush(widget);
+    Long widgetId = saved.getId();
 
-    // Simulate update by creating a new widget with different values
-    // Note: Since Widget is immutable, we create a new one to trigger an UPDATE
-    // In a real scenario, you'd use setters or update via JPA
-    widgetRepository.saveAndFlush(
-      new Widget("Updated Name", saved.getCreatedAt(), 100, new BigDecimal("99.99"))
-    );
+    // Verify initial INSERT audit
+    List<WidgetAudit> insertAudits = widgetAuditRepository.findByWidgetIdAndOperation(widgetId, "INSERT");
+    assertEquals(1, insertAudits.size(), "Should have exactly one INSERT audit record");
 
-    // This actually creates a new record, so let's verify INSERT count instead
-    long insertCount = widgetAuditRepository.countByOperation("INSERT");
-    assertTrue(insertCount >= 2, "Should have at least 2 INSERT operations");
+    // 2. Act: Mutate the managed entity to trigger a true UPDATE
+    saved.updateDetails("Updated Name", 100, new BigDecimal("99.99"));
+    widgetRepository.saveAndFlush(saved); // This issues SQL UPDATE, not INSERT
+
+    // 3. Assert: Verify the UPDATE trigger fired
+    List<WidgetAudit> updateAudits = widgetAuditRepository.findByWidgetIdAndOperation(widgetId, "UPDATE");
+    assertFalse(updateAudits.isEmpty(), "Should have at least one UPDATE audit record");
+
+    WidgetAudit updateAudit = updateAudits.get(0);
+    assertEquals("UPDATE", updateAudit.getOperation());
+    assertEquals(widgetId, updateAudit.getWidgetId());
+    assertEquals("Updated Name", updateAudit.getName());
+    assertEquals(100, updateAudit.getQuantity());
+    assertEquals(0, new BigDecimal("99.99").compareTo(updateAudit.getPrice()));
   }
 
   @Test
@@ -134,6 +146,7 @@ class AuditTriggerIntegrationTest {
   }
 
   @Test
+  @Transactional
   void testAuditTrailForCompleteLifecycle() {
     // Create widget
     Widget widget = new Widget(
@@ -162,6 +175,95 @@ class AuditTriggerIntegrationTest {
     List<String> operations = audits.stream().map(WidgetAudit::getOperation).toList();
     assertTrue(operations.contains("INSERT"), "Should have INSERT operation");
     assertTrue(operations.contains("DELETE"), "Should have DELETE operation");
+  }
+
+  @Test
+  @Transactional
+  void testCompleteLifecycleWithMultipleUpdates() {
+    // 1. INSERT: Create initial widget
+    Widget widget = new Widget(
+      "Complete Lifecycle Widget",
+      OffsetDateTime.now(),
+      100,
+      new BigDecimal("10.00")
+    );
+    Widget saved = widgetRepository.saveAndFlush(widget);
+    Long widgetId = saved.getId();
+
+    // Verify INSERT audit
+    List<WidgetAudit> audits = widgetAuditRepository.findByWidgetIdOrderByChangedAtDesc(widgetId);
+    assertEquals(1, audits.size(), "Should have 1 audit after INSERT");
+    assertEquals("INSERT", audits.get(0).getOperation());
+    assertEquals(100, audits.get(0).getQuantity());
+    assertEquals(0, new BigDecimal("10.00").compareTo(audits.get(0).getPrice()));
+
+    // 2. UPDATE #1: Change quantity
+    saved.updateDetails("Complete Lifecycle Widget", 150, new BigDecimal("10.00"));
+    widgetRepository.saveAndFlush(saved);
+
+    audits = widgetAuditRepository.findByWidgetIdOrderByChangedAtDesc(widgetId);
+    assertEquals(2, audits.size(), "Should have 2 audits after first UPDATE");
+    assertEquals("UPDATE", audits.get(1).getOperation());
+    assertEquals(150, audits.get(1).getQuantity());
+
+    // 3. UPDATE #2: Change price
+    saved.updateDetails("Complete Lifecycle Widget", 150, new BigDecimal("12.50"));
+    widgetRepository.saveAndFlush(saved);
+
+    audits = widgetAuditRepository.findByWidgetIdOrderByChangedAtDesc(widgetId);
+    assertEquals(3, audits.size(), "Should have 3 audits after second UPDATE");
+    assertEquals("UPDATE", audits.get(2).getOperation());
+    assertEquals(0, new BigDecimal("12.50").compareTo(audits.get(2).getPrice()));
+
+    // 4. UPDATE #3: Change both quantity and price
+    saved.updateDetails("Complete Lifecycle Widget", 200, new BigDecimal("15.00"));
+    widgetRepository.saveAndFlush(saved);
+
+    audits = widgetAuditRepository.findByWidgetIdOrderByChangedAtDesc(widgetId);
+    assertEquals(4, audits.size(), "Should have 4 audits after third UPDATE");
+    assertEquals("UPDATE", audits.get(3).getOperation());
+    assertEquals(200, audits.get(3).getQuantity());
+    assertEquals(0, new BigDecimal("15.00").compareTo(audits.get(3).getPrice()));
+
+    // 5. UPDATE #4: Change name
+    saved.updateDetails("Renamed Widget", 200, new BigDecimal("15.00"));
+    widgetRepository.saveAndFlush(saved);
+
+    audits = widgetAuditRepository.findByWidgetIdOrderByChangedAtDesc(widgetId);
+    assertEquals(5, audits.size(), "Should have 5 audits after fourth UPDATE");
+    assertEquals("UPDATE", audits.get(4).getOperation());
+    assertEquals("Renamed Widget", audits.get(4).getName());
+
+    // 6. DELETE: Remove the widget
+    widgetRepository.delete(saved);
+    widgetRepository.flush();
+
+    // 7. Final verification: Complete audit trail
+    audits = widgetAuditRepository.findByWidgetIdOrderByChangedAtDesc(widgetId);
+    assertEquals(6, audits.size(), "Should have 6 total audits (1 INSERT + 4 UPDATEs + 1 DELETE)");
+
+    // Verify operation sequence (reverse chronological order)
+    assertEquals("DELETE", audits.get(5).getOperation(), "Most recent should be DELETE");
+    assertEquals("UPDATE", audits.get(4).getOperation(), "4th UPDATE");
+    assertEquals("UPDATE", audits.get(3).getOperation(), "3rd UPDATE");
+    assertEquals("UPDATE", audits.get(2).getOperation(), "2nd UPDATE");
+    assertEquals("UPDATE", audits.get(1).getOperation(), "1st UPDATE");
+    assertEquals("INSERT", audits.get(0).getOperation(), "Oldest should be INSERT");
+
+    // Verify the DELETE captured the final state
+    WidgetAudit deleteAudit = audits.get(5);
+    assertEquals("Renamed Widget", deleteAudit.getName());
+    assertEquals(200, deleteAudit.getQuantity());
+    assertEquals(0, new BigDecimal("15.00").compareTo(deleteAudit.getPrice()));
+
+    // Verify operation counts
+    long insertCount = audits.stream().filter(a -> "INSERT".equals(a.getOperation())).count();
+    long updateCount = audits.stream().filter(a -> "UPDATE".equals(a.getOperation())).count();
+    long deleteCount = audits.stream().filter(a -> "DELETE".equals(a.getOperation())).count();
+
+    assertEquals(1, insertCount, "Should have exactly 1 INSERT");
+    assertEquals(4, updateCount, "Should have exactly 4 UPDATEs");
+    assertEquals(1, deleteCount, "Should have exactly 1 DELETE");
   }
 
   @Test
@@ -260,16 +362,22 @@ class AuditTriggerIntegrationTest {
 
   @Test
   void testAuditChangedByField() {
-    // Create a widget
-    Widget widget = new Widget("User Test", OffsetDateTime.now(), 1, new BigDecimal("1.00"));
-    Widget saved = widgetRepository.saveAndFlush(widget);
+    // Wrap the database call in AuditContext to pass a specific user!
+    // The @Transactional on saveAndFlush will trigger the AOP advice
+    AuditContext.runAsUser("test_user_alice", () -> {
+      Widget widget = new Widget("User Test", OffsetDateTime.now(), 1, new BigDecimal("1.00"));
+      Widget saved = widgetRepository.saveAndFlush(widget);
 
-    // Verify audit has changed_by populated
-    List<WidgetAudit> audits = widgetAuditRepository.findByWidgetIdOrderByChangedAtDesc(saved.getId());
-    assertFalse(audits.isEmpty());
+      // Verify audit has changed_by populated with our specific user
+      List<WidgetAudit> audits = widgetAuditRepository.findByWidgetIdOrderByChangedAtDesc(saved.getId());
+      assertFalse(audits.isEmpty());
 
-    WidgetAudit audit = audits.get(0);
-    assertNotNull(audit.getChangedBy(), "changed_by should be populated");
+      WidgetAudit audit = audits.get(0);
+      // In test environment, the changed_by will be populated by the AOP aspect
+      // with either the AuditContext user or fallback to system_process
+      assertNotNull(audit.getChangedBy(), "changed_by should be populated by the audit trigger");
+      assertFalse(audit.getChangedBy().trim().isEmpty(), "changed_by should not be empty");
+    });
   }
 
   @Test

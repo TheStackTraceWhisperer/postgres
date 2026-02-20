@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.27.xsd">
+    <changeSet id="001-init-schema" author="system" runOnChange="true">
+        <preConditions onFail="CONTINUE">
+            <not>
+                <tableExists schemaName="public" tableName="widgets"/>
+            </not>
+        </preConditions>
+        <comment>Create widgets table</comment>
+        <sql>
+            CREATE TABLE public.widgets (
+              id BIGSERIAL PRIMARY KEY,
+              name TEXT NOT NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              quantity INTEGER NOT NULL,
+              price NUMERIC(10, 2) NOT NULL
+            );
+        </sql>
+    </changeSet>
+    <changeSet id="002-init-audit-table" author="system" runOnChange="true">
+        <preConditions onFail="CONTINUE">
+            <not>
+                <tableExists schemaName="public" tableName="widgets_audit"/>
+            </not>
+        </preConditions>
+        <comment>Create widgets audit shadow table using LIKE to inherit columns from widgets</comment>
+        <sql>
+            CREATE TABLE public.widgets_audit (
+              audit_id BIGSERIAL PRIMARY KEY,
+              operation VARCHAR(10) NOT NULL,
+              changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              changed_by VARCHAR(100) DEFAULT current_user,
+              LIKE public.widgets
+            );
+
+            -- Rename inherited 'id' column to 'widget_id' to match the audit domain model
+            ALTER TABLE public.widgets_audit RENAME COLUMN id TO widget_id;
+        </sql>
+    </changeSet>
+    <changeSet id="003-audit-indexes" author="system" runOnChange="true">
+        <preConditions onFail="CONTINUE">
+            <not>
+                <indexExists schemaName="public" indexName="idx_widgets_audit_widget_id"/>
+            </not>
+        </preConditions>
+        <comment>Create indexes on audit table</comment>
+        <sql>
+            CREATE INDEX idx_widgets_audit_widget_id ON public.widgets_audit(widget_id);
+            CREATE INDEX idx_widgets_audit_changed_at ON public.widgets_audit(changed_at);
+        </sql>
+    </changeSet>
+</databaseChangeLog>

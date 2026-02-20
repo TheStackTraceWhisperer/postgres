@@ -6,9 +6,15 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.Immutable;
 import java.time.OffsetDateTime;
 
+/**
+ * Read-only audit log entity. @Immutable ensures Hibernate will never
+ * issue UPDATE or DELETE statements against this table, protecting audit integrity.
+ */
 @Entity
+@Immutable
 @Table(name = "widgets_audit")
 public class WidgetAudit {
   @Id

@@ -26,9 +26,19 @@ CREATE INDEX IF NOT EXISTS idx_widgets_audit_widget_id ON public.widgets_audit(w
 CREATE INDEX IF NOT EXISTS idx_widgets_audit_changed_at ON public.widgets_audit(changed_at);
 
 -- Trigger function to capture changes
+-- Uses session variable 'app.current_user' set by the application layer
 CREATE OR REPLACE FUNCTION public.audit_widgets_changes()
 RETURNS TRIGGER AS $$
+DECLARE
+  v_current_user VARCHAR(100);
 BEGIN
+  -- Get the current user from the session variable set by the application
+  -- If not set, fall back to the database user
+  v_current_user := COALESCE(
+    current_setting('app.current_user', true),
+    current_user
+  );
+
   IF (TG_OP = 'DELETE') THEN
     INSERT INTO public.widgets_audit (
       operation,
@@ -36,14 +46,16 @@ BEGIN
       name,
       created_at,
       quantity,
-      price
+      price,
+      changed_by
     ) VALUES (
       'DELETE',
       OLD.id,
       OLD.name,
       OLD.created_at,
       OLD.quantity,
-      OLD.price
+      OLD.price,
+      v_current_user
     );
     RETURN OLD;
   ELSIF (TG_OP = 'UPDATE') THEN
@@ -53,14 +65,16 @@ BEGIN
       name,
       created_at,
       quantity,
-      price
+      price,
+      changed_by
     ) VALUES (
       'UPDATE',
       NEW.id,
       NEW.name,
       NEW.created_at,
       NEW.quantity,
-      NEW.price
+      NEW.price,
+      v_current_user
     );
     RETURN NEW;
   ELSIF (TG_OP = 'INSERT') THEN
@@ -70,14 +84,16 @@ BEGIN
       name,
       created_at,
       quantity,
-      price
+      price,
+      changed_by
     ) VALUES (
       'INSERT',
       NEW.id,
       NEW.name,
       NEW.created_at,
       NEW.quantity,
-      NEW.price
+      NEW.price,
+      v_current_user
     );
     RETURN NEW;
   END IF;

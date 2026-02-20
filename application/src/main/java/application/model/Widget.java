@@ -61,5 +61,19 @@ public class Widget {
   public java.math.BigDecimal getPrice() {
     return price;
   }
+
+  /**
+   * Update mutable widget details. Allows JPA to issue true UPDATE statements.
+   * This is essential for triggering the UPDATE branch of the audit trigger.
+   *
+   * @param name new widget name
+   * @param quantity new quantity
+   * @param price new price
+   */
+  public void updateDetails(String name, Integer quantity, java.math.BigDecimal price) {
+    this.name = name;
+    this.quantity = quantity;
+    this.price = price;
+  }
 }
 
